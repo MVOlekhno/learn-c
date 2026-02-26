@@ -1477,6 +1477,37 @@ End Function
 
 
 
+
+' Try to start/get AutoCAD across multiple versions (Civil/AutoCAD)
+Function CreateAutoCadApp() As Object
+    Dim app As Object
+    Set app = Nothing
+
+    On Error Resume Next
+    Set app = GetObject(, "AutoCAD.Application")
+    If app Is Nothing Then Set app = CreateObject("AutoCAD.Application.26")
+    If app Is Nothing Then Set app = CreateObject("AutoCAD.Application.25")
+    If app Is Nothing Then Set app = CreateObject("AutoCAD.Application.24")
+    If app Is Nothing Then Set app = CreateObject("AutoCAD.Application.23")
+    If app Is Nothing Then Set app = CreateObject("AutoCAD.Application")
+    On Error GoTo 0
+
+    Set CreateAutoCadApp = app
+End Function
+
+Sub PrepareAutoCadSession(acadApp As Object)
+    If acadApp Is Nothing Then Exit Sub
+    On Error Resume Next
+    acadApp.Visible = True
+    acadApp.SetSystemVariable "PROXYNOTICE", 0
+    acadApp.SetSystemVariable "PROXYSHOW", 0
+    acadApp.SetSystemVariable "FILEDIA", 0
+    acadApp.SetSystemVariable "CMDDIA", 0
+    acadApp.SetSystemVariable "RECOVERYMODE", 0
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
 Sub UpdateRevision()
     
     Dim ws As Worksheet
@@ -1888,26 +1919,25 @@ NextRow:
     wordApp.Visible = False
     wordApp.DisplayAlerts = 0
 
-    ' v20: Open AutoCAD (optional - DWG skipped if not available)
+    ' v20+: Open AutoCAD (optional - DWG skipped if not available)
     Dim acadApp As Object
-    Set acadApp = Nothing
-    On Error Resume Next
-    Set acadApp = CreateObject("AutoCAD.Application.24")  ' Civil 3D 2021
-    If acadApp Is Nothing Then Set acadApp = CreateObject("AutoCAD.Application.25")  ' 2022
-    If acadApp Is Nothing Then Set acadApp = CreateObject("AutoCAD.Application.23")  ' 2020
-    If acadApp Is Nothing Then Set acadApp = CreateObject("AutoCAD.Application")     ' any
-    On Error GoTo 0
+    Set acadApp = CreateAutoCadApp()
+
     If acadApp Is Nothing Then
         logText = logText & "[AutoCAD] Not available - DWG files will be SKIPPED" & vbCrLf
     Else
-        ' v23: Make AutoCAD visible so user can dismiss any dialog prompts
-        ' Hidden AutoCAD + dialog (proxy objects, SHX fonts) = macro hangs
-        acadApp.Visible = True
-        On Error Resume Next
-        acadApp.SetSystemVariable "PROXYNOTICE", 0
-        acadApp.SetSystemVariable "FILEDIA", 0
-        Err.Clear
-        On Error GoTo 0
+        PrepareAutoCadSession acadApp
+
+        ' Home/laptop workaround: allow running DOCX-only when Civil causes DWG hangs
+        Dim processDwg As VbMsgBoxResult
+        processDwg = MsgBox("Process DWG files too?" & vbCrLf & _
+                            "Yes = DOCX + DWG" & vbCrLf & _
+                            "No = DOCX only (recommended if Civil 3D hangs)", _
+                            vbYesNo + vbQuestion + vbDefaultButton2, "DWG processing")
+        If processDwg = vbNo Then
+            Set acadApp = Nothing
+            logText = logText & "[AutoCAD] DWG processing disabled by user" & vbCrLf
+        End If
     End If
 
     Dim totalFiles As Long
@@ -2147,12 +2177,9 @@ NextRow:
                         If Err.Number <> 0 Then
                             Err.Clear
                             Set acadApp = Nothing
-                            Set acadApp = CreateObject("AutoCAD.Application.24")
-                            If acadApp Is Nothing Then Set acadApp = CreateObject("AutoCAD.Application.25")
-                            If acadApp Is Nothing Then Set acadApp = CreateObject("AutoCAD.Application.23")
-                            If acadApp Is Nothing Then Set acadApp = CreateObject("AutoCAD.Application")
+                            Set acadApp = CreateAutoCadApp()
                             If Not acadApp Is Nothing Then
-                                acadApp.Visible = True
+                                PrepareAutoCadSession acadApp
                                 logText = logText & "  [AutoCAD restarted]" & vbCrLf
                             Else
                                 logText = logText & "  [AutoCAD restart failed]" & vbCrLf
