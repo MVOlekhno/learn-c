@@ -1921,6 +1921,8 @@ NextRow:
 
     ' v20+: Open AutoCAD (optional - DWG skipped if not available)
     Dim acadApp As Object
+    Dim exportDwgPdf As Boolean
+    exportDwgPdf = False
     Set acadApp = CreateAutoCadApp()
 
     If acadApp Is Nothing Then
@@ -1937,6 +1939,16 @@ NextRow:
         If processDwgChoice = vbNo Then
             Set acadApp = Nothing
             logText = logText & "[AutoCAD] DWG processing disabled by user" & vbCrLf
+        Else
+            Dim exportDwgPdfChoice As VbMsgBoxResult
+            exportDwgPdfChoice = MsgBox("Export DWG to PDF too?" & vbCrLf & _
+                                        "Yes = run PlotToFile for layouts" & vbCrLf & _
+                                        "No = skip DWG PDF export (recommended if plotting hangs)", _
+                                        vbYesNo + vbQuestion + vbDefaultButton2, "DWG PDF export")
+            exportDwgPdf = (exportDwgPdfChoice = vbYes)
+            If Not exportDwgPdf Then
+                logText = logText & "[AutoCAD] DWG PDF export disabled by user" & vbCrLf
+            End If
         End If
     End If
 
@@ -2190,6 +2202,13 @@ NextRow:
                         On Error GoTo 0
 
                         ' v25: pass pdfFolder for B-018 DWG PDF export
+                        Dim dwgPdfFolder As String
+                        If exportDwgPdf Then
+                            dwgPdfFolder = pdfFolder
+                        Else
+                            dwgPdfFolder = ""
+                        End If
+
                         dwgChanges = ProcessDwg(acadApp, dwgFullPath, _
                                                 OLD_REVISION, NEW_REVISION, _
                                                 oldInvs(i), newInvs(i), _
@@ -2197,7 +2216,7 @@ NextRow:
                                                 oldDateFullDwg, newDates(i), _
                                                 oldDateShortDwg, newDateShorts(i), _
                                                 OLD_YEAR, newYears(i), dwgDiagStr, _
-                                                pdfFolder)
+                                                dwgPdfFolder)
 
                         If dwgChanges >= 0 Then
                             logText = logText & "  OK DWG: " & dwgName & " (" & dwgChanges & " chg) " & dwgDiagStr & vbCrLf
@@ -3321,6 +3340,10 @@ DwgErrHandler:
     On Error Resume Next
     If Not dwgDoc Is Nothing Then
         dwgDoc.Close False
+        If Err.Number <> 0 Then
+            Err.Clear
+            dwgDoc.Close
+        End If
         Set dwgDoc = Nothing
     End If
     On Error GoTo 0
