@@ -48,6 +48,19 @@ Const COL_OLD_GIP As Long = 10   ' J - old GIP is in same column, row 3 (header 
 Const DATA_START_ROW As Long = 4
 Const HEADER_ROW As Long = 3     ' Row with column headers (contains old GIP name)
 
+Public TRACE_LOG_PATH As String
+
+Sub AppendTrace(msg As String)
+    If TRACE_LOG_PATH = "" Then Exit Sub
+    On Error Resume Next
+    Dim ff As Long
+    ff = FreeFile
+    Open TRACE_LOG_PATH For Append As #ff
+    Print #ff, Format(Now, "yyyy-mm-dd hh:nn:ss") & " | " & msg
+    Close #ff
+    On Error GoTo 0
+End Sub
+
 
 ' ============================================================
 ' UTILITY FUNCTIONS
@@ -1818,6 +1831,16 @@ NextRow:
     Dim fso As Object
     Set fso = CreateObject("Scripting.FileSystemObject")
     
+    TRACE_LOG_PATH = mainFolder & "\UPDATE_TRACE.log"
+    On Error Resume Next
+    Dim ffTrace As Long
+    ffTrace = FreeFile
+    Open TRACE_LOG_PATH For Output As #ffTrace
+    Print #ffTrace, "TRACE START"
+    Close #ffTrace
+    On Error GoTo 0
+    AppendTrace "Run start OLD=" & OLD_REVISION & " NEW=" & NEW_REVISION
+
     Dim logText As String
     logText = ""
     
@@ -1922,7 +1945,9 @@ NextRow:
     ' v20+: Open AutoCAD (optional - DWG skipped if not available)
     Dim acadApp As Object
     Dim exportDwgPdf As Boolean
+    Dim forceModelScan As Boolean
     exportDwgPdf = False
+    forceModelScan = False
     Set acadApp = CreateAutoCadApp()
 
     If acadApp Is Nothing Then
@@ -1948,6 +1973,18 @@ NextRow:
             exportDwgPdf = (exportDwgPdfChoice = vbYes)
             If Not exportDwgPdf Then
                 logText = logText & "[AutoCAD] DWG PDF export disabled by user" & vbCrLf
+            End If
+
+            Dim forceModelScanChoice As VbMsgBoxResult
+            forceModelScanChoice = MsgBox("Scan Model space even if CLD layouts exist?" & vbCrLf & _
+                                          "Yes = process Model too (needed when stamp is in Model)" & vbCrLf & _
+                                          "No = skip Model for speed", _
+                                          vbYesNo + vbQuestion + vbDefaultButton1, "Model space scan")
+            forceModelScan = (forceModelScanChoice = vbYes)
+            If forceModelScan Then
+                logText = logText & "[AutoCAD] Model scan forced ON" & vbCrLf
+            Else
+                logText = logText & "[AutoCAD] Model scan forced OFF" & vbCrLf
             End If
         End If
     End If
@@ -2209,6 +2246,7 @@ NextRow:
                             dwgPdfFolder = ""
                         End If
 
+                        AppendTrace "DWG BEGIN: " & dwgName
                         dwgChanges = ProcessDwg(acadApp, dwgFullPath, _
                                                 OLD_REVISION, NEW_REVISION, _
                                                 oldInvs(i), newInvs(i), _
@@ -2216,15 +2254,17 @@ NextRow:
                                                 oldDateFullDwg, newDates(i), _
                                                 oldDateShortDwg, newDateShorts(i), _
                                                 OLD_YEAR, newYears(i), dwgDiagStr, _
-                                                dwgPdfFolder)
+                                                dwgPdfFolder, forceModelScan)
 
                         If dwgChanges >= 0 Then
+                            AppendTrace "DWG OK: " & dwgName & " chg=" & dwgChanges & " " & dwgDiagStr
                             logText = logText & "  OK DWG: " & dwgName & " (" & dwgChanges & " chg) " & dwgDiagStr & vbCrLf
                             totalChanges = totalChanges + dwgChanges
                             ' v25: count DWG PDFs in total
                             If InStr(dwgDiagStr, "+PDF(") > 0 Then totalPdf = totalPdf + 1
                         Else
-                            logText = logText & "  ERR DWG: " & dwgName & " (" & dwgChanges & ")" & vbCrLf
+                            AppendTrace "DWG ERR: " & dwgName & " " & dwgDiagStr
+                            logText = logText & "  ERR DWG: " & dwgName & " (" & dwgChanges & ") " & dwgDiagStr & vbCrLf
                         End If
                         totalFiles = totalFiles + 1
                     End If
@@ -2904,10 +2944,12 @@ Function ProcessDwg(acadApp As Object, filePath As String, _
                     oldDateShort As String, newDateShort As String, _
                     oldYear As String, newYear As String, _
                     Optional ByRef dwgDiag As String = "", _
-                    Optional pdfFolder As String = "") As Long
+                    Optional pdfFolder As String = "", _
+                    Optional forceModelScan As Boolean = False) As Long
 
     On Error GoTo DwgErrHandler
     dwgDiag = ""
+    AppendTrace "ProcessDwg open: " & filePath
 
     ' v24: Build Cyrillic C variant of oldRev for B-012 fix
     Dim cyrOldRev As String
@@ -2925,11 +2967,14 @@ Function ProcessDwg(acadApp As Object, filePath As String, _
     On Error Resume Next
     Set dwgDoc = acadApp.Documents.Open(filePath, False)  ' ReadOnly=False
     If Err.Number <> 0 Or dwgDoc Is Nothing Then
+        dwgDiag = "[OPEN ERR " & Err.Number & ": " & Err.Description & "]"
+        AppendTrace "ProcessDwg open error: " & dwgDiag
         Err.Clear
         On Error GoTo 0
         ProcessDwg = -1
         Exit Function
     End If
+    AppendTrace "ProcessDwg opened"
     On Error GoTo DwgErrHandler
 
     Dim changeCount As Long
@@ -2971,7 +3016,7 @@ Function ProcessDwg(acadApp As Object, filePath As String, _
     ' --- STEP 1A: scan top-level block reference attributes ---
     For Each layout In dwgDoc.Layouts
         ' v25 B-019: skip Model if CLD layouts exist
-        If hasCLDLayouts And layout.Name = "Model" Then GoTo NextLayout_1A
+        If hasCLDLayouts And layout.Name = "Model" And (Not forceModelScan) Then GoTo NextLayout_1A
         Set blk = layout.Block
         For entIdx = 0 To blk.Count - 1
             Set ent = blk.Item(entIdx)
@@ -3061,7 +3106,7 @@ NextLayout_1A:
 
         For Each layout In dwgDoc.Layouts
             ' v25 B-019: skip Model if CLD layouts exist
-            If hasCLDLayouts And layout.Name = "Model" Then GoTo NextLayout_1B
+            If hasCLDLayouts And layout.Name = "Model" And (Not forceModelScan) Then GoTo NextLayout_1B
             Set blk = layout.Block
             For entIdx = 0 To blk.Count - 1
                 Set ent = blk.Item(entIdx)
@@ -3106,7 +3151,7 @@ NextLayout_1B:
 
     For Each layout In dwgDoc.Layouts
         ' v25 B-019: skip Model if CLD layouts exist
-        If hasCLDLayouts And layout.Name = "Model" Then GoTo NextLayout_2
+        If hasCLDLayouts And layout.Name = "Model" And (Not forceModelScan) Then GoTo NextLayout_2
         Set blk = layout.Block
         For entIdx = 0 To blk.Count - 1
             Set ent = blk.Item(entIdx)
@@ -3329,21 +3374,22 @@ NextLayout_2:
     End If
 
     ' Save DWG
+    AppendTrace "ProcessDwg save"
     dwgDoc.Save
+    AppendTrace "ProcessDwg close"
     dwgDoc.Close
     Set dwgDoc = Nothing
+    AppendTrace "ProcessDwg done"
 
     ProcessDwg = changeCount
     Exit Function
 
 DwgErrHandler:
+    dwgDiag = dwgDiag & " [ERR " & Err.Number & ": " & Err.Description & "]"
+    AppendTrace "ProcessDwg handler: " & dwgDiag
     On Error Resume Next
     If Not dwgDoc Is Nothing Then
-        dwgDoc.Close False
-        If Err.Number <> 0 Then
-            Err.Clear
-            dwgDoc.Close
-        End If
+        ' Avoid extra hangs in handler close on some Civil3D versions
         Set dwgDoc = Nothing
     End If
     On Error GoTo 0
