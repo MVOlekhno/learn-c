@@ -1929,12 +1929,12 @@ NextRow:
         PrepareAutoCadSession acadApp
 
         ' Home/laptop workaround: allow running DOCX-only when Civil causes DWG hangs
-        Dim processDwg As VbMsgBoxResult
-        processDwg = MsgBox("Process DWG files too?" & vbCrLf & _
+        Dim processDwgChoice As VbMsgBoxResult
+        processDwgChoice = MsgBox("Process DWG files too?" & vbCrLf & _
                             "Yes = DOCX + DWG" & vbCrLf & _
                             "No = DOCX only (recommended if Civil 3D hangs)", _
                             vbYesNo + vbQuestion + vbDefaultButton2, "DWG processing")
-        If processDwg = vbNo Then
+        If processDwgChoice = vbNo Then
             Set acadApp = Nothing
             logText = logText & "[AutoCAD] DWG processing disabled by user" & vbCrLf
         End If
