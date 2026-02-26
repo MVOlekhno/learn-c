@@ -235,6 +235,69 @@ Function DetectNewRevFromHeader(ws As Object) As String
 End Function
 
 
+' Validate strict date token format DD.MM.YY or DD.MM.YYYY
+Function IsValidDateToken(s As String) As Boolean
+    On Error GoTo Invalid
+    Dim dd As Long
+    Dim mm As Long
+    Dim yy As Long
+
+    s = Trim(s)
+    If Len(s) <> 8 And Len(s) <> 10 Then GoTo Invalid
+    If Mid(s, 3, 1) <> "." Or Mid(s, 6, 1) <> "." Then GoTo Invalid
+
+    dd = CLng(Mid(s, 1, 2))
+    mm = CLng(Mid(s, 4, 2))
+    yy = CLng(Mid(s, 7))
+
+    If dd < 1 Or dd > 31 Then GoTo Invalid
+    If mm < 1 Or mm > 12 Then GoTo Invalid
+
+    If Len(s) = 8 Then
+        If yy < 0 Or yy > 99 Then GoTo Invalid
+    Else
+        If yy < 1900 Or yy > 2099 Then GoTo Invalid
+    End If
+
+    IsValidDateToken = True
+    Exit Function
+Invalid:
+    IsValidDateToken = False
+End Function
+
+' Replace dates by wildcard, but only if found token is a valid date
+Function ReplaceValidatedDateWildcard(targetRange As Object, patternText As String, replacementText As String) As Long
+    Dim cnt As Long
+    cnt = 0
+
+    Dim findRange As Object
+    Set findRange = targetRange.Duplicate
+
+    With findRange.Find
+        .ClearFormatting
+        .Replacement.ClearFormatting
+        .Text = patternText
+        .Forward = True
+        .Wrap = 0
+        .Format = False
+        .MatchCase = True
+        .MatchWildcards = True
+
+        Do While .Execute
+            If IsValidDateToken(findRange.Text) Then
+                findRange.Text = replacementText
+                cnt = cnt + 1
+            End If
+            findRange.Collapse 0
+        Loop
+
+        .MatchWildcards = False
+    End With
+
+    ReplaceValidatedDateWildcard = cnt
+End Function
+
+
 ' ============================================================
 ' STAGE 1: Recursive rename & cleanup
 ' ============================================================
@@ -2260,36 +2323,18 @@ Function ProcessDocx(wordApp As Object, filePath As String, _
     ' UL/CAA/CAB stamps have dates like 10.06.2024 and 10.06.24 that differ from
     ' the document date in Excel — use wildcard to catch any date with old year.
     If newDateFull <> "" And oldYear <> "" Then
-        ' Wildcard: [0-9]{2}.[0-9]{2}.YYYY -> newDateFull
+        ' Wildcard: [0-9]{2}[.][0-9]{2}[.]YYYY -> newDateFull (validated)
         For Each storyRange In doc.StoryRanges
-            With storyRange.Find
-                .ClearFormatting: .Replacement.ClearFormatting
-                .Text = "[0-9]{2}[.][0-9]{2}[.]" & oldYear
-                .Replacement.Text = newDateFull
-                .Forward = True: .Wrap = 0: .Format = False
-                .MatchCase = True: .MatchWildcards = True
-                .Execute Replace:=2
-            End With
-            storyRange.Find.MatchWildcards = False
+            changeCount = changeCount + ReplaceValidatedDateWildcard(storyRange, "[0-9]{2}[.][0-9]{2}[.]" & oldYear, newDateFull)
         Next storyRange
-        changeCount = changeCount + 1
     End If
     If newDateShort <> "" And oldYear <> "" Then
         Dim oldYY2 As String
         oldYY2 = Right(oldYear, 2)
-        ' Wildcard: [0-9]{2}.[0-9]{2}.YY -> newDateShort
+        ' Wildcard: [0-9]{2}[.][0-9]{2}[.]YY -> newDateShort (validated)
         For Each storyRange In doc.StoryRanges
-            With storyRange.Find
-                .ClearFormatting: .Replacement.ClearFormatting
-                .Text = "[0-9]{2}[.][0-9]{2}[.]" & oldYY2
-                .Replacement.Text = newDateShort
-                .Forward = True: .Wrap = 0: .Format = False
-                .MatchCase = True: .MatchWildcards = True
-                .Execute Replace:=2
-            End With
-            storyRange.Find.MatchWildcards = False
+            changeCount = changeCount + ReplaceValidatedDateWildcard(storyRange, "[0-9]{2}[.][0-9]{2}[.]" & oldYY2, newDateShort)
         Next storyRange
-        changeCount = changeCount + 1
     End If
 
     ' 3. FIO via StoryRanges
@@ -2577,35 +2622,15 @@ NextHF:
                     changeCount = changeCount + 1
                 End If
             End If
-            ' B-020: wildcard — replace ANY DD.MM.YY where YY = last 2 digits of old year
-            With doc.Content.Find
-                .ClearFormatting: .Replacement.ClearFormatting
-                .Text = "[0-9]{2}[.][0-9]{2}[.]" & oldYY
-                .Replacement.Text = newDateShort
-                .Forward = True: .Wrap = 1: .Format = False
-                .MatchCase = True: .MatchWildcards = True
-                .Execute Replace:=2
-            End With
-            doc.Content.Find.MatchWildcards = False
-            changeCount = changeCount + 1
+            ' B-020: wildcard DD.MM.YY with validation (avoid false matches)
+            changeCount = changeCount + ReplaceValidatedDateWildcard(doc.Content, "[0-9]{2}[.][0-9]{2}[.]" & oldYY, newDateShort)
         End If
         
         ' Replace date DD.MM.YYYY: any date with old year -> new date from col M
         ' Using wildcard to match XX.XX.2024 -> 19.02.2026
         If newDateFull <> "" And oldYear <> "" And newYear <> "" Then
-            ' Use wildcard: [0-9]{2}.[0-9]{2}.YYYY -> newDateFull
-            With doc.Content.Find
-                .ClearFormatting: .Replacement.ClearFormatting
-                .Text = "[0-9]{2}[.][0-9]{2}[.]" & oldYear
-                .Replacement.Text = newDateFull
-                .Forward = True: .Wrap = 1: .Format = False
-                .MatchCase = True: .MatchWildcards = True
-                .Execute Replace:=2  ' wdReplaceAll
-            End With
-            changeCount = changeCount + 1
-            
-            ' Reset wildcards for subsequent searches
-            doc.Content.Find.MatchWildcards = False
+            ' Use wildcard DD.MM.YYYY with validation
+            changeCount = changeCount + ReplaceValidatedDateWildcard(doc.Content, "[0-9]{2}[.][0-9]{2}[.]" & oldYear, newDateFull)
         End If
         
         ' Replace GIP surname only (B-016: via LastWord)
