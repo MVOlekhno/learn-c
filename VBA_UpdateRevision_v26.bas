@@ -467,7 +467,7 @@ Sub FindDocxFolders(fso As Object, folderPath As String, _
     For Each f In folder.Files
         Dim extLower As String
         extLower = LCase(fso.GetExtensionName(f.Name))
-        If extLower = "docx" Or extLower = "dwg" Then
+        If extLower = "docx" Or extLower = "doc" Or extLower = "dwg" Then
             folders.Add folderPath
             Exit For
         End If
@@ -1879,8 +1879,8 @@ NextRow:
             Dim shifrUnderscore As String
             shifrUnderscore = Replace(currentShifr, ".", "_")
             
-            ' Collect docx files in this folder
-            Dim docxFiles() As String
+            ' Collect Word files in this folder (.docx + .doc)
+            Dim docFiles() As String
             Dim dCnt As Long
             dCnt = 0
             
@@ -1888,15 +1888,22 @@ NextRow:
             dFile = Dir(docxFolder & "\*.docx")
             Do While dFile <> ""
                 dCnt = dCnt + 1
-                ReDim Preserve docxFiles(1 To dCnt)
-                docxFiles(dCnt) = dFile
+                ReDim Preserve docFiles(1 To dCnt)
+                docFiles(dCnt) = dFile
+                dFile = Dir()
+            Loop
+            dFile = Dir(docxFolder & "\*.doc")
+            Do While dFile <> ""
+                dCnt = dCnt + 1
+                ReDim Preserve docFiles(1 To dCnt)
+                docFiles(dCnt) = dFile
                 dFile = Dir()
             Loop
             
             Dim di As Long
             For di = 1 To dCnt
                 Dim fileName As String
-                fileName = docxFiles(di)
+                fileName = docFiles(di)
                 
                 Dim fnameNorm As String
                 fnameNorm = Replace(fileName, "_", ".")
@@ -2069,6 +2076,29 @@ NextRow:
                         Dim dwgChanges As Long
                         Dim dwgDiagStr As String
                         dwgDiagStr = ""
+
+                        ' P2: check AutoCAD COM liveliness and restart if needed (T-019)
+                        On Error Resume Next
+                        Dim acadAlive As Long
+                        acadAlive = acadApp.Documents.Count
+                        If Err.Number <> 0 Then
+                            Err.Clear
+                            Set acadApp = Nothing
+                            Set acadApp = CreateObject("AutoCAD.Application.24")
+                            If acadApp Is Nothing Then Set acadApp = CreateObject("AutoCAD.Application.25")
+                            If acadApp Is Nothing Then Set acadApp = CreateObject("AutoCAD.Application.23")
+                            If acadApp Is Nothing Then Set acadApp = CreateObject("AutoCAD.Application")
+                            If Not acadApp Is Nothing Then
+                                acadApp.Visible = True
+                                logText = logText & "  [AutoCAD restarted]" & vbCrLf
+                            Else
+                                logText = logText & "  [AutoCAD restart failed]" & vbCrLf
+                                On Error GoTo 0
+                                GoTo NextDwg
+                            End If
+                        End If
+                        On Error GoTo 0
+
                         ' v25: pass pdfFolder for B-018 DWG PDF export
                         dwgChanges = ProcessDwg(acadApp, dwgFullPath, _
                                                 OLD_REVISION, NEW_REVISION, _
@@ -2103,7 +2133,7 @@ NextDwg:
     Dim summary As String
     summary = "DONE! " & OLD_REVISION & " -> " & NEW_REVISION & vbCrLf & vbCrLf
     summary = summary & "Stage 1:" & vbCrLf
-    summary = summary & "  Deleted (pdf/bak): " & delCount & vbCrLf
+    summary = summary & "  Deleted (pdf/bak/temp): " & delCount & vbCrLf
     summary = summary & "  Renamed (dirs+files): " & renCount & vbCrLf & vbCrLf
     summary = summary & "Stage 2:" & vbCrLf
     summary = summary & "  Docx folders: " & docxFolders.Count & vbCrLf
@@ -2234,7 +2264,7 @@ Function ProcessDocx(wordApp As Object, filePath As String, _
         For Each storyRange In doc.StoryRanges
             With storyRange.Find
                 .ClearFormatting: .Replacement.ClearFormatting
-                .Text = "[0-9]{2}.[0-9]{2}." & oldYear
+                .Text = "[0-9]{2}[.][0-9]{2}[.]" & oldYear
                 .Replacement.Text = newDateFull
                 .Forward = True: .Wrap = 0: .Format = False
                 .MatchCase = True: .MatchWildcards = True
@@ -2251,7 +2281,7 @@ Function ProcessDocx(wordApp As Object, filePath As String, _
         For Each storyRange In doc.StoryRanges
             With storyRange.Find
                 .ClearFormatting: .Replacement.ClearFormatting
-                .Text = "[0-9]{2}.[0-9]{2}." & oldYY2
+                .Text = "[0-9]{2}[.][0-9]{2}[.]" & oldYY2
                 .Replacement.Text = newDateShort
                 .Forward = True: .Wrap = 0: .Format = False
                 .MatchCase = True: .MatchWildcards = True
@@ -2550,7 +2580,7 @@ NextHF:
             ' B-020: wildcard — replace ANY DD.MM.YY where YY = last 2 digits of old year
             With doc.Content.Find
                 .ClearFormatting: .Replacement.ClearFormatting
-                .Text = "[0-9]{2}.[0-9]{2}." & oldYY
+                .Text = "[0-9]{2}[.][0-9]{2}[.]" & oldYY
                 .Replacement.Text = newDateShort
                 .Forward = True: .Wrap = 1: .Format = False
                 .MatchCase = True: .MatchWildcards = True
@@ -2566,7 +2596,7 @@ NextHF:
             ' Use wildcard: [0-9]{2}.[0-9]{2}.YYYY -> newDateFull
             With doc.Content.Find
                 .ClearFormatting: .Replacement.ClearFormatting
-                .Text = "[0-9]{2}.[0-9]{2}." & oldYear
+                .Text = "[0-9]{2}[.][0-9]{2}[.]" & oldYear
                 .Replacement.Text = newDateFull
                 .Forward = True: .Wrap = 1: .Format = False
                 .MatchCase = True: .MatchWildcards = True
